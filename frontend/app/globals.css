@@ -111,4 +111,117 @@ h1 {
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* General Card Styling */
+.card {
+  background-color: #ffffff;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24);
+  margin-bottom: 20px;
+}
+
+/* Thinking Process Display Enhancements */
+.thinking-subtitle {
+  font-size: 1.3em;
+  color: #1877f2; /* Theme blue */
+  margin-bottom: 15px;
+  border-bottom: 2px solid #e7f3ff; /* Light blue border */
+  padding-bottom: 10px;
+}
+
+.analysis-list, .synthesis-list {
+  list-style-type: none;
+  padding-left: 0;
+}
+
+.analysis-item, .synthesis-point {
+  padding: 10px;
+  border-bottom: 1px solid #eee; /* Light separator for items */
+  margin-bottom: 10px;
+}
+
+.analysis-item:last-child, .synthesis-point:last-child {
+  border-bottom: none;
+}
+
+.analysis-question strong {
+  color: #333; /* Darker text for question emphasis */
+}
+
+.analysis-answer {
+  margin-top: 5px;
+  color: #555; /* Slightly lighter text for answer */
+  padding-left: 15px; /* Indent answer slightly */
+  font-style: italic;
+}
+
+.synthesis-point {
+  line-height: 1.6;
+  color: #444;
+}
+
+/* Final Answer Display Enhancements */
+.final-answer-container {
+  margin-top: 25px;
+}
+
+.final-answer-title {
+  font-size: 1.5em;
+  color: #1877f2; /* Theme blue */
+  text-align: left;
+  margin-bottom: 15px;
+  border-bottom: 2px solid #e7f3ff; /* Light blue border */
+  padding-bottom: 10px;
+}
+
+.final-answer-list {
+  list-style-type: none;
+  padding-left: 0;
+  margin-top: 0;
+}
+
+.final-answer-item {
+  margin-bottom: 12px;
+  line-height: 1.6;
+  color: #333; /* Main text color */
+}
+
+.source-link {
+  margin-left: 8px;
+  font-size: 0.9em;
+  color: #1877f2; /* Theme blue for links */
+  text-decoration: none;
+  font-weight: bold;
+}
+
+.source-link:hover {
+  text-decoration: underline;
+}
+
+.additional-sources-container {
+  margin-top: 20px;
+  padding-top: 15px;
+  border-top: 1px solid #dddfe2; /* Separator */
+}
+
+.additional-sources-title {
+  font-size: 1.1em;
+  color: #606770; /* Subdued color for less emphasis */
+  margin-bottom: 10px;
+}
+
+.additional-sources-list {
+  list-style-type: disc;
+  padding-left: 20px;
+}
+
+.additional-source-item a {
+  color: #1877f2; /* Theme blue */
+  text-decoration: none;
+}
+
+.additional-source-item a:hover {
+  text-decoration: underline;
 } 

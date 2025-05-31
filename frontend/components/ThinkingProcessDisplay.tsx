@@ -55,14 +55,14 @@ const ThinkingProcessDisplay: React.FC<ThinkingProcessDisplayProps> = ({
       case 'analysis':
         if (!aiAnalysisData) return null;
         return (
-          <div className="thinking-bubble">
-            <h2>Analyzing...</h2>
-            <ul>
+          <div className="thinking-bubble card">
+            <h2 className="thinking-subtitle">Analyzing Information</h2>
+            <ul className="analysis-list">
               {aiAnalysisData.analysis.map((item: AnalysisItem, index) => (
-                <li key={`analysis-${index}`}>
-                  <strong>{item.question}</strong>
+                <li key={`analysis-${index}`} className="analysis-item">
+                  <p className="analysis-question"><strong>Question:</strong> {item.question}</p>
                   {item.analysis_content && item.analysis_content.trim() !== '' && (
-                     <p>{item.analysis_content}</p>
+                     <p className="analysis-answer">{item.analysis_content}</p>
                   )}
                 </li>
               ))}
@@ -72,11 +72,11 @@ const ThinkingProcessDisplay: React.FC<ThinkingProcessDisplayProps> = ({
       case 'synthesis':
         if (!aiAnalysisData) return null;
         return (
-          <div className="thinking-bubble">
-            <h2>Synthesizing...</h2>
-            <ul>
+          <div className="thinking-bubble card">
+            <h2 className="thinking-subtitle">Synthesizing Insights</h2>
+            <ul className="synthesis-list">
               {aiAnalysisData.synthesis.map((point, index) => (
-                <li key={`synthesis-${index}`}>{point}</li>
+                <li key={`synthesis-${index}`} className="synthesis-point">{point}</li>
               ))}
             </ul>
           </div>
