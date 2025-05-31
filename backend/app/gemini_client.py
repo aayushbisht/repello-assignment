@@ -2,6 +2,7 @@ import os
 import google.generativeai as genai
 from dotenv import load_dotenv
 import logging
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -38,8 +39,8 @@ async def generate_response(query: str, search_results: list) -> dict:
             for i, result in enumerate(search_results)
         ])
         
-        # Construct the prompt with clear instructions for citation
-        prompt = f"""You are an AI research assistant. Analyze the following search results and provide a comprehensive answer to the query. Always cite your sources using the format [Source X] where X is the source number.
+        # Construct the prompt with flexible analysis structure
+        prompt = f"""You are an AI research assistant that provides comprehensive analysis. Analyze the following search results and provide a detailed answer to the query. Always cite your sources using the format [Source X] where X is the source number.
 
 Query: {query}
 
@@ -48,27 +49,55 @@ Search Results:
 
 Please provide your response in the following EXACT format:
 
-1. ANALYSIS:
-- Step 1: [Your first analysis step with citations]
-- Step 2: [Your second analysis step with citations]
-- Step 3: [Your third analysis step with citations]
+1. SUB-QUESTIONS:
+- Question 1: [First sub-question to explore]
+- Question 2: [Second sub-question to explore]
+[Add more sub-questions as needed based on query complexity and details asked, minimum 2]
 
-2. SYNTHESIS:
+2. ANALYSIS:
+- Step 1: [Analysis of first sub-question with citations]
+- Step 2: [Analysis of second sub-question with citations]
+[Add more analysis steps as needed, minimum 2 steps]
+
+3. SYNTHESIS:
 - Key Point 1: [First key finding with citation, e.g., "According to [Source 1], ..."]
 - Key Point 2: [Second key finding with citation]
-- Key Point 3: [Third key finding with citation]
+[Add more key points as needed based on query complexity and details asked, minimum 2 points]
 
-3. FINAL ANSWER:
-[Your comprehensive answer synthesizing all findings, with citations]
+4. FINAL ANSWER:
+[Your comprehensive answer synthesizing all findings, with citations.
+The final answer MUST be in bullet-point format.
+The length and level of detail should be proportional to the query's complexity and the amount of relevant information found.
+For complex queries or when more detail is explicitly requested (e.g., "tell me in detail about...", "explain Java"), provide a more detailed and extensive answer.
+Use bullet points (-) for main ideas and optionally use indented sub-bullet points (* or +) for further details or examples.
 
-4. SOURCES:
+Example:
+- Main point 1, covering key aspect A, with [Source X].
+- Main point 2, explaining concept B, based on [Source Y].
+  * Sub-detail 2.1, elaborating on B.
+  * Sub-detail 2.2, providing an example for B, from [Source Z].
+- Main point 3, summarizing findings on C.
+]
+
+5. SOURCES:
 [List of sources used with their URLs]
 
 Important:
 - Always cite sources using [Source X] format
-- Include at least one citation for each key point
+- Include at least one citation for each key point in SYNTHESIS
 - Ensure your response is factual and well-supported by the sources
-- If information is from multiple sources, cite all relevant sources"""
+- If information is from multiple sources, cite all relevant sources
+- Show your reasoning process clearly
+- The number of sub-questions, analysis steps, and key points in SYNTHESIS should be proportional to the query's complexity (minimum of 2 for each, more for complex queries).
+- The FINAL ANSWER's length and detail should adapt to the query's complexity and information richness. It MUST be in bullet points.
+- For complex queries, feel free to add more sub-questions, steps, and points
+- The final answer MUST be comprehensive and detailed, especially for:
+  * Queries asking for details
+  * Broad topic queries
+  * Technical explanations
+  * Historical context
+  * Comparative analysis
+  * Practical applications"""
 
         # Generate response
         response = model.generate_content(prompt)
@@ -83,9 +112,10 @@ Important:
         
         # Initialize structured response
         structured_response = {
+            "sub_questions": [],
             "analysis": [],
             "synthesis": [],
-            "final_answer": "",
+            "final_answer": [],
             "sources": []
         }
         
@@ -98,51 +128,57 @@ Important:
                 continue
                 
             # Process each section based on its header
-            if section.startswith('1. ANALYSIS:'):
+            if section.startswith('1. SUB-QUESTIONS:'):
+                # Extract sub-questions
+                questions = section.split('\n')[1:]  # Skip the header
+                for question in questions:
+                    if question.startswith('- Question'):
+                        structured_response["sub_questions"].append(question[question.find(':')+1:].strip())
+                        
+            elif section.startswith('2. ANALYSIS:'):
                 # Extract analysis steps
                 steps = section.split('\n')[1:]  # Skip the header
-                for step in steps:
-                    if step.startswith('- Step'):
-                        structured_response["analysis"].append(step[step.find(':')+1:].strip())
-                        
-            elif section.startswith('2. SYNTHESIS:'):
-                # Extract key points
+                current_step = None
+                current_content = []
+                
+                for line in steps:
+                    if line.startswith('- Step'):
+                        if current_step is not None:
+                            structured_response["analysis"].append({
+                                "question": current_step,
+                                "analysis_content": ' '.join(current_content)
+                            })
+                        current_step = line[line.find(':')+1:].strip()
+                        current_content = []
+                    elif current_step is not None:
+                        current_content.append(line.strip())
+                
+                if current_step is not None:
+                    structured_response["analysis"].append({
+                        "question": current_step,
+                        "analysis_content": ' '.join(current_content)
+                    })
+                    
+            elif section.startswith('3. SYNTHESIS:'):
+                # Extract synthesis points
                 points = section.split('\n')[1:]  # Skip the header
                 for point in points:
                     if point.startswith('- Key Point'):
                         structured_response["synthesis"].append(point[point.find(':')+1:].strip())
                         
-            elif section.startswith('3. FINAL ANSWER:'):
-                # Extract final answer
-                answer = section.split('\n', 1)[1]  # Skip the header
-                structured_response["final_answer"] = answer.strip()
+            elif section.startswith('4. FINAL ANSWER:'):
+                # Extract final answer in bullet points
+                answer_lines = section.split('\n')[1:]  # Skip the header
+                # Filter out empty lines but preserve others as is (to keep indentation for sub-bullets)
+                structured_response["final_answer"] = [line for line in answer_lines if line.strip()]
                 
-            elif section.startswith('4. SOURCES:'):
+            elif section.startswith('5. SOURCES:'):
                 # Extract sources
                 sources = section.split('\n')[1:]  # Skip the header
-                for source in sources:
-                    if source.strip():
-                        structured_response["sources"].append(source.strip())
+                structured_response["sources"] = [source.strip() for source in sources if source.strip()]
         
-        # Validate the response
-        if not any(structured_response.values()):
-            logger.error("Failed to parse response into structured format")
-            return {
-                "query": query,
-                "reasoning": ["Raw response parsing failed"],
-                "key_points": [],
-                "answer": response_text,
-                "sources": []
-            }
-        
-        return {
-            "query": query,
-            "reasoning": structured_response["analysis"],
-            "key_points": structured_response["synthesis"],
-            "answer": structured_response["final_answer"],
-            "sources": structured_response["sources"]
-        }
-        
+        return structured_response
+            
     except Exception as e:
         logger.error(f"Error generating response: {str(e)}")
         raise Exception(f"Failed to generate response: {str(e)}")
