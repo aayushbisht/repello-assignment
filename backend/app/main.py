@@ -1,5 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from .search import search_searxng, process_search_results
 
 app = FastAPI(
     title="AI Research Assistant",
@@ -16,6 +18,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+class SearchQuery(BaseModel):
+    query: str
+
 @app.get("/")
 async def root():
     return {
@@ -25,4 +30,17 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"} 
+    return {"status": "healthy"}
+
+@app.post("/api/search")
+async def search(query: SearchQuery):
+    try:
+        # Perform the search
+        results = await search_searxng(query.query)
+        
+        # Process the results
+        processed_results = process_search_results(results)
+        
+        return processed_results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) 
