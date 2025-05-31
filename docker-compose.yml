@@ -8,6 +8,13 @@ services:
       - ./searxng-data:/etc/searxng
     environment:
       - BASE_URL=http://localhost:8080/
+      - INSTANCE_NAME=searxng
+      - ENABLE_METRICS=false
+      - ENABLE_UI=false
+      - ENABLE_DEBUG=false
+      - BASE_URL=false
+      - HTTP_PROTOCOL_VERSION=1.0
+      - HTTP_CLIENT_UA=curl/7.68.0
     cap_drop:
       - ALL
     cap_add:
