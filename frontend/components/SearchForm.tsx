@@ -25,6 +25,7 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading }) => {
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Enter your research query..."
         disabled={isLoading}
+        style={{width: '80%'}}
       />
       <button type="submit" disabled={isLoading}>
         {isLoading ? 'Searching...' : 'Search'}

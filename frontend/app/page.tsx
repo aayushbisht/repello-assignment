@@ -1,63 +1,287 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useRouter, usePathname } from 'next/navigation';
+import { supabase } from '../lib/supabaseClient';
 import SearchForm from '../components/SearchForm';
 import ThinkingProcessDisplay from '../components/ThinkingProcessDisplay';
 import FinalAnswerDisplay from '../components/FinalAnswerDisplay';
-import { FetchedLinksResponse, AiResponse, DisplayStage } from '../types';
+import { FetchedLinksResponse, AiResponse, DisplayStage, ChatMessage, ChatSession } from '../types';
+import type { User } from '@supabase/supabase-js';
 
 const HomePage: React.FC = () => {
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoadingAuth, setIsLoadingAuth] = useState(true);
+  const router = useRouter();
+  const pathname = usePathname();
+
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [chatSessionsList, setChatSessionsList] = useState<ChatSession[]>([]);
+  const [isLoadingSessions, setIsLoadingSessions] = useState<boolean>(false);
+  const [isLoadingMessages, setIsLoadingMessages] = useState<boolean>(false);
+  const [currentPendingMessageId, setCurrentPendingMessageId] = useState<string | null>(null);
+
   const [currentQuery, setCurrentQuery] = useState<string>("");
   const [fetchedLinksData, setFetchedLinksData] = useState<FetchedLinksResponse | null>(null);
   const [aiAnalysisData, setAiAnalysisData] = useState<AiResponse | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(false); // General loading for user feedback
+  const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [currentDisplayStage, setCurrentDisplayStage] = useState<DisplayStage>('idle');
   const [currentLinkIndex, setCurrentLinkIndex] = useState<number>(0);
   const [loadingMessage, setLoadingMessage] = useState<string>("");
 
-  const STAGE_DELAY = 1500; 
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const prevChatHistoryLengthRef = useRef<number>(0); // Ref to track previous chat history length
+
+  const STAGE_DELAY = 7000;
   const LINK_DISPLAY_DELAY = 700;
 
-  // Function to fetch AI Analysis
-  const fetchAiAnalysis = useCallback(async (query: string, linksData: FetchedLinksResponse) => {
+  // ---- Supabase Helper Functions ----
+  const fetchChatSessions = useCallback(async () => {
+    if (!user) return;
+    setIsLoadingSessions(true);
+    try {
+      const { data, error } = await supabase
+        .from('chat_sessions')
+        .select('id, user_id, created_at, session_name')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      setChatSessionsList(data || []);
+      if (data && data.length > 0 && !currentSessionId) {
+        // If no session is active, load the most recent one
+        // await handleSelectChat(data[0].id);
+      }
+    } catch (err: any) {
+      console.error("Error fetching chat sessions:", err);
+      setError("Could not load chat sessions.");
+    }
+    setIsLoadingSessions(false);
+  }, [user, currentSessionId]);
+
+  const handleNewChat = async () => {
+    if (!user) return;
+    setChatHistory([]);
+    setAiAnalysisData(null);
+    setFetchedLinksData(null);
+    setCurrentDisplayStage('idle');
+    setError(null);
+    setCurrentQuery("");
+    setIsLoading(false);
+    setCurrentPendingMessageId(null);
+    setCurrentSessionId(null); // Explicitly set to null before creating a new one
+    prevChatHistoryLengthRef.current = 0; // Reset for new chat scroll
+    
+    try {
+      const { data, error } = await supabase
+        .from('chat_sessions')
+        .insert({ user_id: user.id, session_name: `New Chat ${new Date().toLocaleTimeString()}` })
+        .select('id, user_id, created_at, session_name')
+        .single(); 
+      if (error) throw error;
+      if (data) {
+        setCurrentSessionId(data.id);
+        setChatSessionsList(prev => [data, ...prev]);
+      }
+    } catch (err:any) {
+      console.error("Error creating new chat session:", err);
+      setError("Could not start a new chat.");
+    }
+  };
+
+  const handleSelectChat = async (sessionId: string) => {
+    if (!user || sessionId === currentSessionId) return;
+    setCurrentSessionId(sessionId);
+    setChatHistory([]);
+    setAiAnalysisData(null);
+    setFetchedLinksData(null);
+    setCurrentDisplayStage('idle');
+    setError(null);
+    setCurrentPendingMessageId(null);
+    setIsLoadingMessages(true);
+    prevChatHistoryLengthRef.current = 0; // Reset for selected chat scroll
+
+    try {
+      const { data, error } = await supabase
+        .from('chat_messages')
+        .select('id, query_text, response_data, created_at, session_id, user_id') // Ensure all needed fields
+        .eq('session_id', sessionId)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      
+      const loadedMessages: ChatMessage[] = (data || []).map(msg => ({
+        id: msg.id,
+        query: msg.query_text,
+        response: msg.response_data as AiResponse | null,
+        stage: 'final', 
+        created_at: msg.created_at,
+        session_id: msg.session_id,
+        user_id: msg.user_id,
+        // fetchedLinks and error are not directly stored in response_data, so they'll be null/undefined here
+      }));
+      setChatHistory(loadedMessages);
+      prevChatHistoryLengthRef.current = loadedMessages.length; // Set after loading messages
+    } catch (err: any) {
+      console.error("Error fetching messages for session:", err);
+      setError("Could not load messages for this chat.");
+    }
+    setIsLoadingMessages(false);
+  };
+
+  const saveChatMessage = async (messageData: Partial<ChatMessage>, forMessageId?: string | null) => {
+    if (!user || !currentSessionId) {
+        console.warn("User or session ID missing, cannot save message");
+        return null;
+    }
+    const messageIdToSaveAgainst = forMessageId || currentPendingMessageId;
+
+    const payload = {
+        session_id: currentSessionId,
+        user_id: user.id,
+        query_text: messageData.query,
+        response_data: messageData.response || null,
+        // If you add an error column to your DB, you can save messageData.error here
+    };
+
+    if (messageIdToSaveAgainst) { 
+        const { data, error } = await supabase
+            .from('chat_messages')
+            .update({ response_data: payload.response_data /*, error_text: messageData.error || null */ })
+            .eq('id', messageIdToSaveAgainst)
+            .select('id, query_text, response_data, created_at, session_id, user_id')
+            .single();
+        if (error) {
+            console.error("Error updating chat message:", error);
+            setError("Failed to save response.");
+            return null;
+        }
+        // setCurrentPendingMessageId(null); // Cleared when stage becomes final
+        return data;
+    } else { 
+        const { data, error } = await supabase
+            .from('chat_messages')
+            .insert(payload)
+            .select('id, query_text, response_data, created_at, session_id, user_id')
+            .single();
+        if (error) {
+            console.error("Error saving new chat message:", error);
+            setError("Failed to save message.");
+            return null;
+        }
+        return data; 
+    }
+  };
+
+  // ---- Auth and Initial Load ----
+  useEffect(() => {
+    const checkUserAndLoadData = async () => {
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) {
+        console.error("Error getting session:", sessionError);
+        setIsLoadingAuth(false); router.push('/login'); return;
+      }
+      if (session?.user) {
+        setUser(session.user);
+        setIsLoadingSessions(true);
+        try {
+          const { data: sessionsData, error: sessionsError } = await supabase
+            .from('chat_sessions')
+            .select('id, user_id, created_at, session_name')
+            .eq('user_id', session.user.id)
+            .order('created_at', { ascending: false });
+          if (sessionsError) throw sessionsError;
+          const validSessions = sessionsData || [];
+          setChatSessionsList(validSessions);
+          if (validSessions.length > 0) {
+            await handleSelectChat(validSessions[0].id);
+          } else {
+            // Option: await handleNewChat(); // Create a new chat if none exist on first login
+          }
+        } catch (err: any) {
+          console.error("Error fetching initial chat sessions:", err);
+          setError("Could not load initial chat sessions.");
+        }
+        setIsLoadingSessions(false);
+      } else {
+        router.push('/login');
+      }
+      setIsLoadingAuth(false);
+    };
+    checkUserAndLoadData();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        setUser(null); setChatHistory([]); setChatSessionsList([]); setCurrentSessionId(null); setCurrentPendingMessageId(null); router.push('/login');
+      } else if ((event === 'SIGNED_IN' || event === 'USER_UPDATED') && session?.user) {
+        setUser(session.user);
+        if (pathname === '/login') router.push('/');
+        else if (!isLoadingAuth && chatSessionsList.length === 0 && !currentSessionId) fetchChatSessions();
+      }
+    });
+    return () => { authListener.subscription.unsubscribe(); };
+  }, [router, pathname, isLoadingAuth]); // Removed fetchChatSessions and handleSelectChat from deps
+
+  // Scroll to bottom effect
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      const hasNewMessage = chatHistory.length > prevChatHistoryLengthRef.current;
+      const isAiProcessing = !!currentPendingMessageId;
+
+      // Scroll to bottom if a new message is added OR if AI is actively processing the current query
+      if (hasNewMessage || isAiProcessing) {
+        chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+      }
+    }
+    // Update the ref to the current length for the next comparison
+    prevChatHistoryLengthRef.current = chatHistory.length;
+  }, [chatHistory, currentPendingMessageId]); // Depend on chatHistory and currentPendingMessageId
+
+  // ---- Core Chat Logic ----
+  const fetchAiAnalysis = useCallback(async (query: string, linksData: FetchedLinksResponse, forMessageId: string | null) => {
+    setAiAnalysisData(null); // Clear previous global AI data
     setCurrentDisplayStage('fetchingAiAnalysis');
     setLoadingMessage("Preparing AI analysis...");
+    setError(null);
     try {
       const response = await fetch(`http://localhost:8000/api/fetch-ai-analysis`, {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json' 
-        },
-        body: JSON.stringify({ 
-          original_query: query,
-          search_results: linksData 
-        }),
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ original_query: query, search_results: linksData }),
       });
-
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ detail: 'AI analysis failed: ' + response.statusText }));
         throw new Error(errorData.detail || 'AI analysis network response was not ok');
       }
-      const analysisData: AiResponse = await response.json();
-      setAiAnalysisData(analysisData);
-      setCurrentDisplayStage('subquestions'); // Start AI response display
+      const analysisRespData: AiResponse = await response.json();
+      setAiAnalysisData(analysisRespData); // Set global for ThinkingProcessDisplay
+      setCurrentDisplayStage('subquestions'); // Start thinking animation
+
+      await saveChatMessage({ response: analysisRespData }, forMessageId);
+      // Update local chat history, but keep its stage based on global currentDisplayStage until 'final'
+      setChatHistory(prev => prev.map(ch => 
+        ch.id === forMessageId ? { ...ch, response: analysisRespData } : ch
+      ));
+
     } catch (err: any) {
       console.error("AI Analysis fetch error:", err);
-      setError(err.message || 'An error occurred while fetching AI analysis.');
+      const errorMsg = err.message || 'An error occurred while fetching AI analysis.';
+      setError(errorMsg);
       setCurrentDisplayStage('error');
+      await saveChatMessage({ error: errorMsg }, forMessageId); 
+      setChatHistory(prev => prev.map(ch => 
+        ch.id === forMessageId ? { ...ch, error: errorMsg, stage: 'error' } : ch
+      ));
+      setCurrentPendingMessageId(null); // Error ends pending state
     }
-  }, []);
+  }, [user, currentSessionId]); // Removed currentPendingMessageId from deps for saveChatMessage
 
+  // Stage advancement logic for an active query
   useEffect(() => {
-    let timer: NodeJS.Timeout;
-
-    if (currentDisplayStage === 'idle' || currentDisplayStage === 'error' || currentDisplayStage === 'fetchingLinks' || currentDisplayStage === 'fetchingAiAnalysis') {
-        // No automatic advancement for these stages from here
-        return;
+    if (!currentPendingMessageId || isLoadingAuth || currentDisplayStage === 'idle' || currentDisplayStage === 'error' || currentDisplayStage === 'fetchingLinks' || currentDisplayStage === 'fetchingAiAnalysis') {
+      return;
     }
-
+    let timer: NodeJS.Timeout;
     const advanceStage = () => {
       switch (currentDisplayStage) {
         case 'gatheringLinks':
@@ -65,43 +289,63 @@ const HomePage: React.FC = () => {
             if (currentLinkIndex < fetchedLinksData.results.length - 1) {
               timer = setTimeout(() => setCurrentLinkIndex(prev => prev + 1), LINK_DISPLAY_DELAY);
             } else {
-              // All links shown, trigger AI analysis fetch
               if (currentQuery && fetchedLinksData) {
-                fetchAiAnalysis(currentQuery, fetchedLinksData);
+                fetchAiAnalysis(currentQuery, fetchedLinksData, currentPendingMessageId);
               }
             }
           } else {
-          
-             if (currentQuery && fetchedLinksData) { // fetchedLinksData would be non-null but results array empty
-                fetchAiAnalysis(currentQuery, fetchedLinksData);
+            if (currentQuery && fetchedLinksData) { 
+              fetchAiAnalysis(currentQuery, fetchedLinksData, currentPendingMessageId);
             }
           }
           break;
-        case 'subquestions':
+        case 'subquestions': if (aiAnalysisData) timer = setTimeout(() => setCurrentDisplayStage('analysis'), STAGE_DELAY); break;
+        case 'analysis': if (aiAnalysisData) timer = setTimeout(() => setCurrentDisplayStage('synthesis'), STAGE_DELAY); break;
+        case 'synthesis': 
           if (aiAnalysisData) {
-            timer = setTimeout(() => setCurrentDisplayStage('analysis'), STAGE_DELAY);
+            timer = setTimeout(() => { 
+              setCurrentDisplayStage('final');
+              setChatHistory(prev => prev.map(ch => ch.id === currentPendingMessageId ? {...ch, stage: 'final'} : ch));
+              setCurrentPendingMessageId(null); // Query processing finished
+              setAiAnalysisData(null); // Clear global AI data after use
+              setFetchedLinksData(null); // Clear global links data
+              setCurrentQuery(""); // Clear current query context
+            }, STAGE_DELAY); 
           }
           break;
-        case 'analysis':
-          if (aiAnalysisData) {
-            timer = setTimeout(() => setCurrentDisplayStage('synthesis'), STAGE_DELAY);
-          }
-          break;
-        case 'synthesis':
-          if (aiAnalysisData) {
-            timer = setTimeout(() => setCurrentDisplayStage('final'), STAGE_DELAY);
-          }
-          break;
-        default:
-          break;
+        default: break;
       }
     };
-
     advanceStage();
     return () => clearTimeout(timer);
-  }, [currentDisplayStage, fetchedLinksData, aiAnalysisData, currentLinkIndex, fetchAiAnalysis, currentQuery]);
+  }, [currentDisplayStage, fetchedLinksData, aiAnalysisData, currentLinkIndex, fetchAiAnalysis, currentQuery, isLoadingAuth, currentPendingMessageId]);
 
   const handleSearch = async (searchQuery: string) => {
+    if (!user) return;
+    let activeSessionId = currentSessionId;
+
+    if (!activeSessionId) {
+        setIsLoading(true);
+        const { data: newSessionData, error: newSessionError } = await supabase
+            .from('chat_sessions')
+            .insert({ user_id: user.id, session_name: `Chat: ${searchQuery.substring(0,20)}...` })
+            .select('id, user_id, created_at, session_name')
+            .single();
+        setIsLoading(false);
+        if (newSessionError || !newSessionData) {
+            console.error("Error creating new session implicitly:", newSessionError);
+            setError("Could not start a new chat session."); return;
+        }
+        activeSessionId = newSessionData.id;
+        setCurrentSessionId(activeSessionId);
+        setChatSessionsList(prev => [newSessionData, ...prev]);
+        setChatHistory([]);
+    }
+    if (!activeSessionId) { // Should not happen if above logic is correct
+        setError("Critical: No active session ID after attempt to create/set."); return;
+    }
+
+    // Reset global states for the new query processing flow
     setCurrentQuery(searchQuery);
     setIsLoading(true);
     setError(null);
@@ -110,89 +354,163 @@ const HomePage: React.FC = () => {
     setCurrentLinkIndex(0);
     setCurrentDisplayStage('fetchingLinks');
     setLoadingMessage("Fetching relevant links...");
+    
+    const initialMessageData = { query: searchQuery, stage: 'fetchingLinks' as DisplayStage, session_id: activeSessionId, user_id: user.id };
+    const savedQueryRecord = await saveChatMessage(initialMessageData, null); // Pass null for forMessageId to insert
 
+    if (savedQueryRecord && savedQueryRecord.id) {
+        setCurrentPendingMessageId(savedQueryRecord.id);
+        setChatHistory(prev => [...prev, { ...initialMessageData, id: savedQueryRecord.id, created_at: savedQueryRecord.created_at }]);
+    } else {
+        setChatHistory(prev => [...prev, { ...initialMessageData, id: `local-${Date.now()}` }]); // Local fallback
+        console.error("Failed to save initial query to DB. Proceeding with local history item.");
+    }
+    
     try {
       const response = await fetch(`http://localhost:8000/api/fetch-links`, {
         method: 'POST',
-        headers: { 
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify({ query: searchQuery }),
       });
-
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ detail: 'Link fetch failed: ' + response.statusText }));
         throw new Error(errorData.detail || 'Link fetch network response was not ok');
       }
-      const linksData: FetchedLinksResponse = await response.json();
-      setFetchedLinksData(linksData);
+      const linksDataResp: FetchedLinksResponse = await response.json();
+      setFetchedLinksData(linksDataResp); // Set global for ThinkingProcessDisplay
+      
+      setChatHistory(prev => prev.map(ch => 
+        ch.id === (savedQueryRecord?.id || currentPendingMessageId) ? 
+        { ...ch, fetchedLinks: linksDataResp, stage: (linksDataResp?.results?.length > 0) ? 'gatheringLinks' : 'fetchingAiAnalysis' } : ch
+      ));
 
-      if (linksData && linksData.results && linksData.results.length > 0) {
+      if (linksDataResp && linksDataResp.results && linksDataResp.results.length > 0) {
         setCurrentDisplayStage('gatheringLinks');
       } else {
-        
-        setLoadingMessage("No specific links found. Attempting general analysis...")
-        
+        setLoadingMessage("No specific links found. Attempting general analysis...");
         const emptyLinksData: FetchedLinksResponse = { query: searchQuery, results: [], total_results: 0 };
-        fetchAiAnalysis(searchQuery, emptyLinksData);
+        fetchAiAnalysis(searchQuery, emptyLinksData, savedQueryRecord?.id || currentPendingMessageId);
       }
     } catch (err: any) {
       console.error("Search error:", err);
-      setError(err.message || 'An unknown error occurred during search.');
+      const errorMsg = err.message || 'An unknown error occurred during search.';
+      setError(errorMsg);
       setCurrentDisplayStage('error');
+      if (savedQueryRecord?.id || currentPendingMessageId) {
+         await saveChatMessage({ error: errorMsg }, savedQueryRecord?.id || currentPendingMessageId); 
+      }
+      setChatHistory(prev => prev.map(ch => 
+        ch.id === (savedQueryRecord?.id || currentPendingMessageId) ? { ...ch, error: errorMsg, stage: 'error' } : ch
+      ));
+      setCurrentPendingMessageId(null); // Error ends pending state
     } finally {
-      setIsLoading(false); 
-                        
+      setIsLoading(false);
     }
   };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    // Auth listener will redirect
+  };
+
+  // ---- Render Logic ----
+  if (isLoadingAuth || (!user && pathname !== '/login')) {
+    return <div style={{display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', width:'100vw', overflow:'hidden'}}>Loading authentication...</div>;
+  }
+  if (pathname === '/login') return null;
+  if (!user) { 
+    router.push('/login');
+    return <div style={{display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', width:'100vw', overflow:'hidden'}}>Redirecting to login...</div>; 
+  }
   
-  // Determine which data to pass to ThinkingProcessDisplay
-  const thinkingAiData = (currentDisplayStage === 'subquestions' || currentDisplayStage === 'analysis' || currentDisplayStage === 'synthesis') 
-                       ? aiAnalysisData 
-                       : null;
-  const thinkingLinksData = (currentDisplayStage === 'gatheringLinks') 
-                          ? fetchedLinksData 
-                          : null;
-
   return (
-    <div className="container">
-      <h1>AI Research Assistant</h1>
-      <SearchForm onSearch={handleSearch} isLoading={isLoading || currentDisplayStage === 'fetchingLinks' || currentDisplayStage === 'fetchingAiAnalysis'} />
+    <div style={{ display: 'flex', height: '100vh', width: '100vw', flexDirection: 'row', overflow: 'hidden' /* Prevent body scroll */ }}>
+      {/* Sidebar */}
+      <div style={{ width: '280px', backgroundColor: '#f0f2f5', padding: '15px', borderRight: '1px solid #ddd', display: 'flex', flexDirection: 'column', gap: '10px', overflowY: 'auto' /* Allow sidebar to scroll if content overflows */ }}>
+        <div style={{display: 'flex', justifyContent:'space-between', alignItems:'center'}}>
+            <h2 style={{margin:0}}>Chat History</h2>
+            {user && <span style={{fontSize:'0.8em', color:'#555'}}>{user.email?.split('@')[0]}</span>}
+        </div>
+        <button onClick={handleNewChat} style={{padding: '8px', cursor:'pointer'}} disabled={isLoading || isLoadingSessions || isLoadingMessages}>New Chat</button>
+        {isLoadingSessions && <p>Loading sessions...</p>}
+        <div style={{flexGrow:1, overflowY: 'auto', border:'1px solid #ccc', borderRadius:'4px', background:'#fff'}}>
+          {chatSessionsList.map(session => (
+            <div 
+              key={session.id} 
+              onClick={() => handleSelectChat(session.id)} 
+              style={{
+                padding: '10px',
+                cursor: 'pointer', 
+                borderBottom: '1px solid #eee',
+                backgroundColor: currentSessionId === session.id ? '#e7f3ff' : 'transparent',
+                fontWeight: currentSessionId === session.id ? 'bold' : 'normal',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis'
+              }}
+              title={session.session_name || new Date(session.created_at).toLocaleDateString()}
+            >
+              {session.session_name || new Date(session.created_at).toLocaleDateString()}
+            </div>
+          ))}
+        </div>
+        <button onClick={handleLogout} style={{padding: '8px', cursor:'pointer'}}>Logout</button>
+      </div>
 
-      {(currentDisplayStage === 'fetchingLinks' || currentDisplayStage === 'fetchingAiAnalysis') && 
-        <ThinkingProcessDisplay 
-            fetchedLinksData={null}
-            aiAnalysisData={null} 
-            displayStage={currentDisplayStage} 
-            loadingMessage={loadingMessage}
-        />
-      }
+      {/* Main Content */}
+      <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', marginTop: '10px' /* Prevent this column from causing page scroll */ }}>
+       
+        <div 
+          ref={chatContainerRef} 
+          className="container" 
+          style={{ 
+            flexGrow: 1, 
+            overflowY: 'auto', 
+            overflowX: 'hidden',
+            padding: '20px', 
+            paddingBottom: '20px' 
+          }}
+        >
+          {!currentSessionId && !isLoadingSessions && !isLoadingMessages && chatSessionsList.length === 0 && (
+             <div style={{textAlign: 'center', marginTop: '50px'}}>
+                <p>No chats yet. Click "New Chat" to start a conversation.</p>
+             </div>
+          )}
+          {(!currentSessionId && !isLoadingSessions && !isLoadingMessages && chatSessionsList.length > 0 ) && (
+             <div style={{textAlign: 'center', marginTop: '50px'}}>
+                <p>Select a chat from the sidebar or start a "New Chat".</p>
+             </div>
+          )}
+          {isLoadingMessages && currentSessionId && <p style={{textAlign: 'center', marginTop: '20px'}}>Loading messages...</p>}
+          
+          {chatHistory.map((chatItem) => (
+            <div key={chatItem.id || `local-${chatItem.query}`} style={{ marginBottom: '20px'}}>
+              <div style={{fontWeight: 'bold', backgroundColor: '#e0e0e0', padding: '8px 12px', borderRadius: '5px 5px 0 0'}}>Search: {chatItem.query}</div>
+              
+              {chatItem.id === currentPendingMessageId && 
+               (currentDisplayStage === 'fetchingLinks' || currentDisplayStage === 'fetchingAiAnalysis' || 
+                currentDisplayStage === 'gatheringLinks' || currentDisplayStage === 'subquestions' || 
+                currentDisplayStage === 'analysis' || currentDisplayStage === 'synthesis') && (
+                <ThinkingProcessDisplay 
+                    fetchedLinksData={fetchedLinksData} 
+                    aiAnalysisData={aiAnalysisData} 
+                    displayStage={currentDisplayStage} 
+                    loadingMessage={loadingMessage} 
+                    currentLinkIndex={currentLinkIndex} />
+              )}
 
-      {currentDisplayStage === 'gatheringLinks' && fetchedLinksData && 
-        <ThinkingProcessDisplay 
-            fetchedLinksData={fetchedLinksData}
-            aiAnalysisData={null} 
-            displayStage={currentDisplayStage} 
-            currentLinkIndex={currentLinkIndex}
-        />
-      }
-
-      {(currentDisplayStage === 'subquestions' || currentDisplayStage === 'analysis' || currentDisplayStage === 'synthesis') && aiAnalysisData &&
-         <ThinkingProcessDisplay 
-            fetchedLinksData={null}
-            aiAnalysisData={aiAnalysisData} 
-            displayStage={currentDisplayStage} 
-        />
-      }
-
-      {currentDisplayStage === 'final' && aiAnalysisData && (
-        <FinalAnswerDisplay aiAnalysisData={aiAnalysisData} />
-      )}
-
-      {currentDisplayStage === 'error' && error && 
-        <p className="error-message">Error: {error}</p>
-      }
+              {chatItem.response && chatItem.stage === 'final' && 
+                <FinalAnswerDisplay aiAnalysisData={chatItem.response} />}
+              {chatItem.error && chatItem.stage === 'error' &&
+                <p className="error-message" style={{marginTop:0, borderRadius:'0 0 5px 5px'}}>Error: {chatItem.error}</p>}
+            </div>
+          ))}
+        </div>
+        
+        <div style={{ padding: '15px 20px',marginTop: '-10px', borderTop: '1px solid #ddd', backgroundColor: '#f8f9fa', flexShrink: 0 /* Prevent shrinking */ }}>
+          <SearchForm onSearch={handleSearch} isLoading={isLoading || isLoadingSessions || isLoadingMessages || currentDisplayStage === 'fetchingLinks' || currentDisplayStage === 'fetchingAiAnalysis'} />
+        </div>
+      </div>
     </div>
   );
 };

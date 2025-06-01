@@ -1,17 +1,22 @@
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+html, body {
+  height: 100%;
   margin: 0;
-  padding: 20px;
-  background-color: #f0f2f5;
-  color: #1c1e21;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  padding: 0;
+  overflow: hidden; /* Prevent page-level scrollbars */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  background-color: #f0f2f5; /* Moved from body specific to here */
+  color: #1c1e21; /* Moved from body specific to here */
+}
+
+body {
+  /* font-family, margin, padding, background-color, color are now in html, body */
+  /* display: flex; */ /* Removed, as the main div in page.tsx handles flex layout */
+  /* flex-direction: column; */ /* Removed */
+  /* align-items: center; */ /* Removed */
 }
 
 .container {
   width: 100%;
-  max-width: 800px;
   background-color: #ffffff;
   border-radius: 8px;
   padding: 20px;

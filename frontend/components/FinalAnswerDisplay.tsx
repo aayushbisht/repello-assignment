@@ -32,7 +32,7 @@ const FinalAnswerDisplay: React.FC<FinalAnswerDisplayProps> = ({ aiAnalysisData 
       }
     }
     if (!foundUrl) {
-      console.warn(`No valid URL found in source string: "${sourceString}"`);
+      // console.warn(`No valid URL found in source string: "${sourceString}"`); // Less noisy console
       return '';
     }
     return foundUrl.trim();
@@ -41,27 +41,36 @@ const FinalAnswerDisplay: React.FC<FinalAnswerDisplayProps> = ({ aiAnalysisData 
   const formatAnswerWithLinkedSources = (answerText: string, allSources: string[]): string => {
     if (!answerText) return '';
 
-    // Regex to find [Source N], [Source N, M], [Source N,M,P] etc.
-    return answerText.replace(/\[Source\s*([\d\s,]+)\]/g, (match, sourceNumbersStr) => {
-      const sourceNumbers = sourceNumbersStr.split(',').map((numStr: string) => parseInt(numStr.trim(), 10));
-      
-      const links = sourceNumbers.map((num: number) => {
-        if (num > 0 && num <= allSources.length) {
+    // Step 1: Find the entire [Source ...] block
+    // Updated regex to be case-insensitive and handle "Source" or "Sources"
+    return answerText.replace(/\[(?:Source|Sources)[^\]]+\]/gi, (matchedBlock) => {
+      // Step 2: Extract all numbers from within the matchedBlock
+      const numbersInBlock = matchedBlock.match(/\d+/g);
+
+      if (!numbersInBlock) {
+        return ''; // If no numbers found in the block, remove the block
+      }
+
+      const links = numbersInBlock
+        .map((numStr: string) => parseInt(numStr, 10))
+        .filter((num: number): num is number => !isNaN(num) && num > 0 && num <= allSources.length)
+        .map((num: number) => {
           const url = parseSourceUrl(allSources[num - 1]);
           if (url) {
             return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="source-link" title="${allSources[num - 1]}">[${num}]</a>`;
           }
-        }
-        return `[Source ${num}]`; // Fallback if source/URL not found
-      }).join(' ');
+          return `[${num}]`; // Fallback if URL not parsable for a valid source number
+        }).join(''); // Join with empty string for [1][2] style
       
-      return links || match; // Return generated links or original match if no links were made
+      // Return the links directly, preserving original spacing.
+      // If links is an empty string (e.g., no valid source numbers found), this effectively removes the matchedBlock.
+      return links; 
     });
   };
 
   return (
     <div className="final-answer-container card">
-      <h2 className="final-answer-title">Comprehensive Answer</h2>
+      <h2 className="final-answer-title">Result</h2>
       {final_answer.length > 0 ? (
         <ul className="final-answer-list">
           {final_answer.map((item, index) => {
