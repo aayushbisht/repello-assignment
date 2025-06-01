@@ -33,6 +33,7 @@ const HomePage: React.FC = () => {
   const [currentDisplayStage, setCurrentDisplayStage] = useState<DisplayStage>('idle');
   const [currentLinkIndex, setCurrentLinkIndex] = useState<number>(0);
   const [loadingMessage, setLoadingMessage] = useState<string>("");
+  const [selectedAiModel, setSelectedAiModel] = useState<string>('gemini');
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const prevChatHistoryLengthRef = useRef<number>(0); // Ref to track previous chat history length
@@ -260,7 +261,14 @@ const HomePage: React.FC = () => {
     setLoadingMessage("Preparing AI analysis...");
     setError(null);
     try {
-      const response = await fetch(`http://localhost:8000/api/fetch-ai-analysis`, {
+      // Determine endpoint based on selectedAiModel
+      const aiEndpoint = selectedAiModel === 'mistral'
+        ? `http://localhost:8000/api/fetch-mistral-analysis`
+        : `http://localhost:8000/api/fetch-ai-analysis`;
+
+      console.log(`Fetching AI analysis from: ${aiEndpoint} for model: ${selectedAiModel}`);
+
+      const response = await fetch(aiEndpoint, { // <-- Use dynamic endpoint
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify({ original_query: query, search_results: linksData }),
@@ -290,7 +298,7 @@ const HomePage: React.FC = () => {
       ));
       setCurrentPendingMessageId(null); // Error ends pending state
     }
-  }, [user, currentSessionId]); // Removed currentPendingMessageId from deps for saveChatMessage
+  }, [user, currentSessionId, selectedAiModel]);
 
   // Stage advancement logic for an active query
   useEffect(() => {
@@ -568,6 +576,20 @@ const HomePage: React.FC = () => {
         </div>
         
         <div style={{ padding: '15px 20px',marginTop: '-10px', borderTop: '1px solid #ddd', backgroundColor: '#f8f9fa', flexShrink: 0 /* Prevent shrinking */ }}>
+          {/* AI Model Selector */}
+          <div style={{ marginBottom: '10px', textAlign: 'center' }}>
+            <label htmlFor="ai-model-select" style={{ marginRight: '8px', fontSize: '0.9em' }}>Select AI Model: </label>
+            <select
+              id="ai-model-select"
+              value={selectedAiModel}
+              onChange={(e) => setSelectedAiModel(e.target.value)}
+              disabled={isLoading || currentDisplayStage !== 'idle'} // Disable if busy or not in idle stage
+              style={{ padding: '5px', borderRadius: '4px', border: '1px solid #ccc' }}
+            >
+              <option value="gemini">Gemini (Google)</option>
+              <option value="mistral">Mistral (Local)</option>
+            </select>
+          </div>
           <SearchForm onSearch={handleSearch} isLoading={isLoading || isLoadingSessions || isLoadingMessages || currentDisplayStage === 'fetchingLinks' || currentDisplayStage === 'fetchingAiAnalysis'} />
         </div>
       </div>
