@@ -9,6 +9,9 @@ import FinalAnswerDisplay from '../components/FinalAnswerDisplay';
 import { FetchedLinksResponse, AiResponse, DisplayStage, ChatMessage, ChatSession } from '../types';
 import type { User } from '@supabase/supabase-js';
 
+const SESSION_NAME_MAX_LENGTH = 35;
+const DEFAULT_NEW_CHAT_NAME = "New Chat";
+
 const HomePage: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
@@ -70,13 +73,13 @@ const HomePage: React.FC = () => {
     setCurrentQuery("");
     setIsLoading(false);
     setCurrentPendingMessageId(null);
-    setCurrentSessionId(null); // Explicitly set to null before creating a new one
-    prevChatHistoryLengthRef.current = 0; // Reset for new chat scroll
+    setCurrentSessionId(null); 
+    prevChatHistoryLengthRef.current = 0; 
     
     try {
       const { data, error } = await supabase
         .from('chat_sessions')
-        .insert({ user_id: user.id, session_name: `New Chat ${new Date().toLocaleTimeString()}` })
+        .insert({ user_id: user.id, session_name: DEFAULT_NEW_CHAT_NAME }) // Use default name
         .select('id, user_id, created_at, session_name')
         .single(); 
       if (error) throw error;
@@ -136,40 +139,53 @@ const HomePage: React.FC = () => {
     }
     const messageIdToSaveAgainst = forMessageId || currentPendingMessageId;
 
-    const payload = {
+    const payload: any = {
         session_id: currentSessionId,
         user_id: user.id,
-        query_text: messageData.query,
-        response_data: messageData.response || null,
-        // If you add an error column to your DB, you can save messageData.error here
     };
+    if (messageData.query) payload.query_text = messageData.query;
+    if (messageData.response) payload.response_data = messageData.response;
+    // If you add an error_text column to your chat_messages table, uncomment and use this
+    // if (messageData.error) payload.error_text = messageData.error;
 
-    if (messageIdToSaveAgainst) { 
+    if (messageIdToSaveAgainst && !payload.query_text) { // Check if it's an update (no new query_text)
+        // This is an update to an existing message (e.g., adding response or error)
+        const updatePayload: any = {};
+        if (payload.response_data) updatePayload.response_data = payload.response_data;
+        // if (payload.error_text) updatePayload.error_text = payload.error_text; // For error saving
+
+        if (Object.keys(updatePayload).length === 0) {
+            console.warn("SaveChatMessage called for update without new data.");
+            return null; // Or return the existing message if needed
+        }
+
         const { data, error } = await supabase
             .from('chat_messages')
-            .update({ response_data: payload.response_data /*, error_text: messageData.error || null */ })
+            .update(updatePayload)
             .eq('id', messageIdToSaveAgainst)
-            .select('id, query_text, response_data, created_at, session_id, user_id')
+            .select('id, query_text, response_data, created_at, session_id, user_id') // Add error_text if used
             .single();
         if (error) {
             console.error("Error updating chat message:", error);
-            setError("Failed to save response.");
+            // Avoid setting global error for this, as it might be a background save
             return null;
         }
-        // setCurrentPendingMessageId(null); // Cleared when stage becomes final
         return data;
-    } else { 
+    } else if (payload.query_text) {
+        // This is an insert for a new message (must have query_text)
         const { data, error } = await supabase
             .from('chat_messages')
-            .insert(payload)
-            .select('id, query_text, response_data, created_at, session_id, user_id')
+            .insert(payload) // query_text is definitely in payload here
+            .select('id, query_text, response_data, created_at, session_id, user_id') // Add error_text if used
             .single();
         if (error) {
             console.error("Error saving new chat message:", error);
-            setError("Failed to save message.");
             return null;
         }
         return data; 
+    } else {
+        console.warn("saveChatMessage called without query for new message or update data for existing.");
+        return null;
     }
   };
 
@@ -321,14 +337,27 @@ const HomePage: React.FC = () => {
   }, [currentDisplayStage, fetchedLinksData, aiAnalysisData, currentLinkIndex, fetchAiAnalysis, currentQuery, isLoadingAuth, currentPendingMessageId]);
 
   const handleSearch = async (searchQuery: string) => {
-    if (!user) return;
+    if (!user) {
+      setError("User not authenticated. Please login.");
+      return;
+    }
+    if (!searchQuery.trim()) {
+      setError("Search query cannot be empty.");
+      return;
+    }
+
     let activeSessionId = currentSessionId;
+    let isNewSessionCreatedForThisSearch = false;
+
+    const newSessionName = searchQuery.length > SESSION_NAME_MAX_LENGTH 
+                           ? searchQuery.substring(0, SESSION_NAME_MAX_LENGTH - 3) + "..." 
+                           : searchQuery;
 
     if (!activeSessionId) {
-        setIsLoading(true);
+        setIsLoading(true); // For session creation
         const { data: newSessionData, error: newSessionError } = await supabase
             .from('chat_sessions')
-            .insert({ user_id: user.id, session_name: `Chat: ${searchQuery.substring(0,20)}...` })
+            .insert({ user_id: user.id, session_name: newSessionName }) // Use query-derived name
             .select('id, user_id, created_at, session_name')
             .single();
         setIsLoading(false);
@@ -339,12 +368,43 @@ const HomePage: React.FC = () => {
         activeSessionId = newSessionData.id;
         setCurrentSessionId(activeSessionId);
         setChatSessionsList(prev => [newSessionData, ...prev]);
-        setChatHistory([]);
+        setChatHistory([]); 
+        prevChatHistoryLengthRef.current = 0;
+        isNewSessionCreatedForThisSearch = true;
     }
-    if (!activeSessionId) { // Should not happen if above logic is correct
-        setError("Critical: No active session ID after attempt to create/set."); return;
+    
+    if (!activeSessionId) { 
+        setError("Critical: No active session ID found or created."); return;
     }
 
+    // If this isn't a brand new session created above, 
+    // check if it's a default-named session needing an update.
+    if (!isNewSessionCreatedForThisSearch) {
+        const currentSessionObject = chatSessionsList.find(s => s.id === activeSessionId);
+        // Check if the current session has the default name AND has no messages yet.
+        // The `chatHistory` check ensures we only rename it on the very first query.
+        if (currentSessionObject && currentSessionObject.session_name === DEFAULT_NEW_CHAT_NAME && chatHistory.length === 0) {
+             try {
+                const { data: updatedSession, error: updateError } = await supabase
+                    .from('chat_sessions')
+                    .update({ session_name: newSessionName })
+                    .eq('id', activeSessionId)
+                    .select('id, user_id, created_at, session_name')
+                    .single();
+
+                if (updateError) throw updateError;
+                if (updatedSession) {
+                    setChatSessionsList(prevList => prevList.map(s => 
+                        s.id === activeSessionId ? updatedSession : s
+                    ));
+                }
+             } catch (err) {
+                console.error("Error updating session name for default chat:", err);
+                // Not a critical error to block search, so we just log it.
+             }
+        }
+    }
+    
     // Reset global states for the new query processing flow
     setCurrentQuery(searchQuery);
     setIsLoading(true);
@@ -458,7 +518,7 @@ const HomePage: React.FC = () => {
       </div>
 
       {/* Main Content */}
-      <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', marginTop: '10px' /* Prevent this column from causing page scroll */ }}>
+      <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', height: '100%',width:'1000px', overflow: 'hidden', marginTop: '10px'  }}>
        
         <div 
           ref={chatContainerRef} 
