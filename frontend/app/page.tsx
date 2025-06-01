@@ -38,7 +38,7 @@ const HomePage: React.FC = () => {
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const prevChatHistoryLengthRef = useRef<number>(0); // Ref to track previous chat history length
 
-  const STAGE_DELAY = 7000;
+  const STAGE_DELAY = 11000;
   const LINK_DISPLAY_DELAY = 700;
 
   // ---- Supabase Helper Functions ----

@@ -55,7 +55,7 @@ export default function LoginPage() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', padding: '20px' }}>
-      <h1>enginex - {isSignUp ? 'Create Account' : 'Login'}</h1>
+      <h1>EnjinX - {isSignUp ? 'Create Account' : 'Login'}</h1>
       <form onSubmit={handleAuth} style={{ display: 'flex', flexDirection: 'column', width: '300px', gap: '10px' }}>
         <input
           type="email"

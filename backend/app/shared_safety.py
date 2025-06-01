@@ -9,13 +9,11 @@ DISALLOWED_OUTPUT_PATTERNS = [
     re.compile(r"I hate all [a-zA-Z\s]+ people", re.IGNORECASE),
     re.compile(r"how to make a (bomb|explosive|weapon)", re.IGNORECASE),
     re.compile(r"detailed instructions for (fraud|theft|illegal act)", re.IGNORECASE),
-    # Add more patterns for NSFW, graphic violence, self-harm encouragement etc.
 ]
 
 OUTPUT_MODERATED_MESSAGE = "[This content has been moderated due to policy reasons]"
 
-# This specific text is for models (like Mistral) that will be instructed to output *only* this.
-# Gemini might be instructed to return a more structured refusal.
+
 SIMPLE_REFUSAL_RESPONSE_TEXT = "I cannot reply to that message."
 
 # Constants for Gemini's structured refusal (if different)
